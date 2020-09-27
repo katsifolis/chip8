@@ -9,7 +9,8 @@
 SDL_Window   *w;
 SDL_Renderer *r;
 bool running  = true;
-bool draw_f   = false;
+bool draw_f   = true;
+char *game    = "breakout.ch8";
 
 const unsigned char fontset[80] = { 0xF0, 0x90, 0x90, 0x90, 0xF0, 0x20, 0x60, 0x20, 0x20, 0x70, 0xF0, 0x10, 0xF0, 0x80, 0xF0, 0xF0, 0x10, 0xF0, 0x10, 0xF0, 0x90, 0x90, 0xF0, 0x10, 0x10, 0xF0, 0x80, 0xF0, 0x10, 0xF0, 0xF0, 0x80, 0xF0, 0x90, 0xF0, 0xF0, 0x10, 0x20, 0x40, 0x40, 0xF0, 0x90, 0xF0, 0x90, 0xF0, 0xF0, 0x90, 0xF0, 0x10, 0xF0, 0xF0, 0x90, 0xF0, 0x90, 0x90, 0xE0, 0x90, 0xE0, 0x90, 0xE0, 0xF0, 0x80, 0x80, 0x80, 0xF0, 0xE0, 0x90, 0x90, 0x90, 0xE0, 0xF0, 0x80, 0xF0, 0x80, 0xF0, 0xF0, 0x80, 0xF0, 0x80, 0x80  };
 
@@ -27,7 +28,6 @@ typedef struct {
 	unsigned short stack[16];
 	unsigned short sp;
 	unsigned char key[16];
-	unsigned char font[80];
 } CHIP8;
 
 CHIP8 new_chip8() {
@@ -35,9 +35,10 @@ CHIP8 new_chip8() {
 	// Initializing the system
 	CHIP8 c;
 	c.pc = 0x200;
+	c.sp = 0;
 
 	// Opening the game to read
-	FILE *f = fopen("s.ch8", "r");
+	FILE *f = fopen(game, "r");
 	if (f == NULL) {
 		fprintf(stderr, "NOT FOUND\n");
 		exit(-1);
@@ -61,21 +62,31 @@ CHIP8 new_chip8() {
 		c.mem[i + 512] = buffer[i];
 
 	// Copying the font set to the struct
-	memcpy(&c.font, &fontset, 80);
+	for (int i = 0; i < 80; i++) 
+		c.mem[i] = fontset[i];
+
+	for (int i = 0; i < 2048; i++) 
+		c.gfx[i] = 0;
 
 	return c;
 }
 
 void emulate_cycle(CHIP8 *c) {
 	uint16_t op = c->mem[c->pc] << 8 | c->mem[c->pc + 1];
-	switch (op & 0xF000) {
-	case 0x0000: // Clears the screen
-		SDL_RenderClear(r);
-		break;
-	case 0x000F:
-		c->pc = c->stack[c->sp];
+	printf("%04X\n", op);
+
+	if (op == 0x00E0) {
+		for (int i = 0; i < 2048; i++)
+			c->gfx[i] = 0x0;
+		draw_f = true;
+		c->pc += 2;
+	}
+	if (op == 0x00EE) {
 		c->sp--;
-		break;
+		c->pc = c->stack[c->sp];
+		c->pc += 2;
+	}
+	switch (op & 0xF000) {
 	case 0x1000:
 		c->pc = op & 0x0FFF;
 		break;
@@ -85,20 +96,20 @@ void emulate_cycle(CHIP8 *c) {
 		c->pc = op & 0x0FFF;
 		break;
 	case 0x3000:
-		if (c->V[(op & 0x0F00) >> 8] == (op & 0x00FF)) c->pc += 4;
+		c->pc += (c->V[(op & 0x0F00) >> 8] == (op & 0x00FF)) ? 4 : 2;
 		break;
 	case 0x4000:
-		if (c->V[(op & 0x0F000) >> 8] != (op & 0x00FF)) c->pc += 4;
+	       	c->pc += (c->V[(op & 0x0F000) >> 8] != (op & 0x00FF)) ? 4 : 2;
 		break;
 	case 0x5000:
-		if (c->V[(op & 0x0F00) >> 8] == c->V[(op & 0x00F0) >> 4]) c->pc += 4;
+		c->pc += (c->V[(op & 0x0F00) >> 8] == c->V[(op & 0x00F0) >> 4]) ? 4 : 2;
 		break;
 	case 0x6000:
-		c->V[(op & 0x0F00) >> 8] = (unsigned char)op; //(op & 0x00FF) >> 8;
+		c->V[(op & 0x0F00) >> 8] = op & 0x00FF;
 		c->pc += 2;
 		break;
 	case 0x7000:
-		c->V[(op & 0x0F00) >> 8] += (unsigned char)op;
+		c->V[(op & 0x0F00) >> 8] += op & 0x00FF;
 		c->pc += 2;
 		break;
 	case 0x8000:
@@ -123,37 +134,38 @@ void emulate_cycle(CHIP8 *c) {
 			c->pc += 2;
 			break;
 		case 0x0004:
-			c->V[0xF] =	c->V[(op & 0x00F0) >> 4] > 0xFF - c->V[(op & 0x0F00) >> 8] ? 1 :  0;
+			c->V[0xF] = (c->V[(op & 0x00F0) >> 4] > 0xFF - c->V[(op & 0x0F00) >> 8]) ? 1 :  0;
 			c->V[(op & 0x0F00) >> 8] += c->V[(op & 0x00F0) >> 4];
 			c->pc += 2;
 			break;
 		case 0x0005:
-			c->V[0xF] =	(c->V[(op & 0x00F0) >> 4] > c->V[(op & 0x0F00) >> 8]) ? 0 :  1;
+			c->V[0xF] = (c->V[(op & 0x00F0) >> 4] > c->V[(op & 0x0F00) >> 8]) ? 0 :  1;
 			c->V[(op & 0x0F00) >> 8] -= c->V[(op & 0x00F0) >> 4];
 			c->pc += 2;
 			break;
 
 		case 0x0006:
-			c->V[0xF] = c->V[(op & 0x0F00) >> 8] & 0x01 ? 1 : 0;
+			c->V[0xF] = c->V[(op & 0x0F00) >> 8] & 0x01;
 			c->V[(op & 0x0F00) >> 8] >>= 1;
 			c->pc += 2;
 			break;
 		case 0x0007:
-			c->V[0xF] =	(c->V[(op & 0x0F00) >> 8] > c->V[(op & 0x00F0) >> 4]) ? 0 :  1;
-			c->V[(op & 0x00F0) >> 4] -= c->V[(op & 0x0F00) >> 8];
+			c->V[0xF] = (c->V[(op & 0x0F00) >> 8] > c->V[(op & 0x00F0) >> 4]) ? 0 :  1;
+			c->V[(op & 0x0F00) >> 8] = c->V[(op & 0x00F0) >> 4] - c->V[(op & 0x0F00) >> 8];
 			c->pc += 2;
 			break;
 		case 0x000E:
-			c->V[0xF] = c->V[(op & 0x0F00) >> 8] & 0x10 ? 1 : 0;
+			c->V[0xF] = c->V[(op & 0x0F00) >> 8] >> 7;
 			c->V[(op & 0x0F00) >> 8] <<= 1;
 			c->pc += 2;
 			break;
 		}
 	case 0x9000:
 		if (c->V[(op & 0x0F00) >> 8] != c->V[(op & 0x00F0) >> 4]) {
-			c->pc +=2;
+			c->pc +=4;
+		} else {
+			c->pc += 2;
 		}
-		c->pc += 2;
 		break;
 	case 0xA000:
 		c->I  = op & 0x0FFF;
@@ -197,19 +209,20 @@ void emulate_cycle(CHIP8 *c) {
 		switch (op & 0x00FF) {
 		case 0x009E: c->pc += (c->key[c->V[(op & 0x0F00) >> 8]] != 0) ? 4 : 2; break;
 		case 0x00A1: c->pc += (c->key[c->V[(op & 0x0F00) >> 8]] == 0) ? 4 : 2; break;
+		default: printf("Unknown opcode %04X", op);
 		}
 		break;
 
 	case 0xF000:
 		switch (op & 0x00FF) {
-		case 0x0007: c->V[(op & 0x0F00) >> 8] = c->dt; c->pc += 2;
+		case 0x0007: c->V[(op & 0x0F00) >> 8] = c->dt; c->pc += 2; break;
 			
 		case 0x000A: 
 		{
 			bool keypress = false;
 			for (int i = 0; i < 16; i++) {
 				if (c->key[i] != 0) {
-					c->V[(op &0x0F00) >> 8] = c->key[i];
+					c->V[(op &0x0F00) >> 8] = i;
 					keypress = true;
 				}
 			}
@@ -221,22 +234,31 @@ void emulate_cycle(CHIP8 *c) {
 
 		case 0x0015: c->dt = c->V[(op & 0x0F00) >> 8]; c->pc += 2; break;
 		case 0x0018: c->st = c->V[(op & 0x0F00) >> 8]; c->pc += 2; break;
-		case 0x001E: c->I += c->V[(op & 0x0F00) >> 8]; c->pc += 2; break;
-		case 0x0029: c->I += c->V[(op & 0x0F00) >> 8]; c->pc += 2; break;
+		case 0x001E: 
+			     if ( c->I + c->V[(op &0x0F00) >> 8] > 0x0FFF ) 
+				     c->V[0xF] = 1;
+			     else
+				     c->V[0xF] = 0;
+			     c->I += c->V[(op & 0x0F00) >> 8]; 
+			     c->pc += 2; 
+			     break;
+
+		case 0x0029: c->I = c->V[(op & 0x0F00) >> 8] * 0x5; c->pc += 2; break;
+
 		case 0x0033: 
 			c->mem[c->I]     = c->V[(op & 0x0F00) >> 8] / 100;
 			c->mem[c->I + 1] = (c->V[(op & 0x0F00) >> 8] / 10) % 10;
 			c->mem[c->I + 2] = (c->V[(op & 0x0F00) >> 8] % 100) % 10;
 			c->pc += 2;
-		break;
+			break;
 		case 0x0055:
-			for (int i = 0; i < c->V[(op & 0x0F00) >>8]; i++) {
+			for (int i = 0; i <= c->V[(op & 0x0F00) >>8]; i++) {
 				c->mem[c->I + i] = c->V[i];
 			}
 			c->pc += 2;
 			break;
 		case 0x0065:
-			for (int i = 0; i < c->V[(op & 0x0F00) >>8]; i++) {
+			for (int i = 0; i <= c->V[(op & 0x0F00) >>8]; i++) {
 				c->V[i] = c->mem[c->I + i];
 			}
 			c->pc += 2;
@@ -245,8 +267,6 @@ void emulate_cycle(CHIP8 *c) {
 		}
 		break;
 	}
-
-
 }
 
 int sdl_setup() {
@@ -256,7 +276,7 @@ int sdl_setup() {
 		return EXIT_FAILURE;
 	}
 
-	w = SDL_CreateWindow("Hello World!", 100, 100, 800, 600, SDL_WINDOW_RESIZABLE);
+	w = SDL_CreateWindow("Hello World!", 100, 100, 320, 640, SDL_WINDOW_RESIZABLE);
 	if (w == NULL) {
 		fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
 		return EXIT_FAILURE;
@@ -274,6 +294,9 @@ int sdl_setup() {
 
 
 	SDL_SetRenderDrawColor(r, 0x00, 0x00, 0x00, 0xff);
+	SDL_RenderClear(r);
+	SDL_RenderPresent(r);
+	SDL_SetRenderDrawColor(r, 0xff, 0xff, 0xff, 0xff);
 
 	return 0;
 
@@ -283,7 +306,7 @@ int sdl_setup() {
 
 void event(CHIP8 *c) {
 	SDL_Event e;
-	if (SDL_WaitEvent(&e) != 0) {
+	while (SDL_PollEvent(&e) != 0) {
 		switch (e.type) {
 		case SDL_QUIT:
 			running = false;
@@ -337,25 +360,31 @@ void event(CHIP8 *c) {
 			case SDLK_x:	c->key[0x0] = 0; break;
 			case SDLK_c:	c->key[0xB] = 0; break;
 			case SDLK_v:	c->key[0xF] = 0; break;
-			break;
 			}
+			break;
 		}
 	}
 }
 
-void update(CHIP8 *c) {
-	SDL_Rect rect = {0, 0, 8, 0};
+void draw(CHIP8 *c) {
+	SDL_Rect rect = {0, 0, 8, 10};
 
 	for (int y = 0; y < 32; y++) {
 		for (int x = 0; x < 64; x++) {
-			if (c->gfx[y * 32 + x] != 0) {
-				rect.x = x;
-				rect.y = y;
-				continue;
+			if (c->gfx[y * 64 + x] == 0) {
+				SDL_SetRenderDrawColor(r, 0x00, 0x00, 0x00, 0xff);
+			} else { 
+				SDL_SetRenderDrawColor(r, 0xff, 0xff, 0xff, 0xff);
 			}
+
+			rect.x = x*8;
+			rect.y = y*10;
+			SDL_RenderDrawRect(r, &rect);
+			SDL_RenderFillRect(r, &rect);
 
 		}
 	}
+	SDL_RenderPresent(r);
 	return;
 
 
@@ -365,13 +394,16 @@ main()
 {
 	CHIP8 b = new_chip8();
 	srand(time(NULL));
-	emulate_cycle(&b);
-
 	sdl_setup();
+
 	while(running) {
+		SDL_Delay(5);
+		emulate_cycle(&b);
+		if (draw_f) { 
+			draw(&b);
+			draw_f = false;
+		}
 		event(&b);
-		if (draw_f) SDL_RenderClear(r);
-		SDL_RenderPresent(r);
 	}
 
 
